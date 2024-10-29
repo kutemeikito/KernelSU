@@ -1,6 +1,7 @@
 package me.weishu.kernelsu.ui.screen
 
 import android.app.Activity.RESULT_OK
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.util.Log
@@ -24,31 +25,33 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.selection.toggleable
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.ExperimentalMaterialApi
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.Wysiwyg
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.pullrefresh.PullRefreshIndicator
-import androidx.compose.material.pullrefresh.pullRefresh
-import androidx.compose.material.pullrefresh.rememberPullRefreshState
+import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
-import androidx.compose.material3.TopAppBarScrollBehavior
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.rememberTopAppBarState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -75,8 +78,10 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.ramcosta.composedestinations.annotation.Destination
 import com.ramcosta.composedestinations.annotation.RootGraph
+import com.ramcosta.composedestinations.generated.destinations.ExecuteModuleActionScreenDestination
 import com.ramcosta.composedestinations.generated.destinations.FlashScreenDestination
 import com.ramcosta.composedestinations.navigation.DestinationsNavigator
+import com.ramcosta.composedestinations.navigation.EmptyDestinationsNavigator
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -102,6 +107,7 @@ import okhttp3.OkHttpClient
 fun ModuleScreen(navigator: DestinationsNavigator) {
     val viewModel = viewModel<ModuleViewModel>()
     val context = LocalContext.current
+    val snackBarHost = LocalSnackbarHost.current
 
     LaunchedEffect(Unit) {
         if (viewModel.moduleList.isEmpty() || viewModel.isNeedRefresh) {
@@ -118,7 +124,11 @@ fun ModuleScreen(navigator: DestinationsNavigator) {
 
     Scaffold(
         topBar = {
-            TopBar(scrollBehavior = scrollBehavior)
+            TopAppBar(
+                scrollBehavior = scrollBehavior,
+                title = { Text(stringResource(R.string.module)) },
+                windowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)
+            )
         },
         floatingActionButton = {
             if (hideInstallButton) {
@@ -144,8 +154,9 @@ fun ModuleScreen(navigator: DestinationsNavigator) {
                 ExtendedFloatingActionButton(
                     onClick = {
                         // select the zip file to install
-                        val intent = Intent(Intent.ACTION_GET_CONTENT)
-                        intent.type = "application/zip"
+                        val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
+                            type = "application/zip"
+                        }
                         selectZipLauncher.launch(intent)
                     },
                     icon = { Icon(Icons.Filled.Add, moduleInstall) },
@@ -154,7 +165,8 @@ fun ModuleScreen(navigator: DestinationsNavigator) {
 
             }
         },
-        contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)
+        contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal),
+        snackbarHost = { SnackbarHost(hostState = snackBarHost) }
     ) { innerPadding ->
         when {
             hasMagisk -> {
@@ -170,8 +182,10 @@ fun ModuleScreen(navigator: DestinationsNavigator) {
                     )
                 }
             }
+
             else -> {
                 ModuleList(
+                    navigator,
                     viewModel = viewModel,
                     modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
                     boxModifier = Modifier.padding(innerPadding),
@@ -187,21 +201,26 @@ fun ModuleScreen(navigator: DestinationsNavigator) {
                                     .putExtra("name", name)
                             )
                         }
-                    }
+                    },
+                    context = context,
+                    snackBarHost = snackBarHost
                 )
             }
         }
     }
 }
 
-@OptIn(ExperimentalMaterialApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ModuleList(
+    navigator: DestinationsNavigator,
     viewModel: ModuleViewModel,
     modifier: Modifier = Modifier,
     boxModifier: Modifier = Modifier,
     onInstallModule: (Uri) -> Unit,
-    onClickModule: (id: String, name: String, hasWebUi: Boolean) -> Unit
+    onClickModule: (id: String, name: String, hasWebUi: Boolean) -> Unit,
+    context: Context,
+    snackBarHost: SnackbarHostState
 ) {
     val failedEnable = stringResource(R.string.module_failed_to_enable)
     val failedDisable = stringResource(R.string.module_failed_to_disable)
@@ -218,9 +237,6 @@ private fun ModuleList(
     val downloadingText = stringResource(R.string.module_downloading)
     val startDownloadingText = stringResource(R.string.module_start_downloading)
     val fetchChangeLogFailed = stringResource(R.string.module_changelog_failed)
-
-    val snackBarHost = LocalSnackbarHost.current
-    val context = LocalContext.current
 
     val loadingDialog = rememberLoadingDialog()
     val confirmDialog = rememberConfirmDialog()
@@ -320,18 +336,21 @@ private fun ModuleList(
         } else {
             null
         }
-        val result = snackBarHost.showSnackbar(message, actionLabel = actionLabel)
+        val result = snackBarHost.showSnackbar(
+            message = message,
+            actionLabel = actionLabel,
+            duration = SnackbarDuration.Long
+        )
         if (result == SnackbarResult.ActionPerformed) {
             reboot()
         }
     }
-
-    val refreshState = rememberPullRefreshState(
-        refreshing = viewModel.isRefreshing,
-        onRefresh = { viewModel.fetchModuleList() }
-    )
-    Box(
-        boxModifier.pullRefresh(refreshState)
+    PullToRefreshBox(
+        modifier = boxModifier,
+        onRefresh = {
+            viewModel.fetchModuleList()
+        },
+        isRefreshing = viewModel.isRefreshing
     ) {
         LazyColumn(
             modifier = modifier,
@@ -341,7 +360,7 @@ private fun ModuleList(
                     start = 16.dp,
                     top = 16.dp,
                     end = 16.dp,
-                    bottom = 16.dp + 16.dp + 56.dp /*  Scaffold Fab Spacing + Fab container height */
+                    bottom = 16.dp + 56.dp + 16.dp + 48.dp + 6.dp /* Scaffold Fab Spacing + Fab container height + SnackBar height */
                 )
             },
         ) {
@@ -384,42 +403,53 @@ private fun ModuleList(
                             }
                         }
 
-                        ModuleItem(module, isChecked, updatedModule.first, onUninstall = {
-                            scope.launch { onModuleUninstall(module) }
-                        }, onCheckChanged = {
-                            scope.launch {
-                                val success = loadingDialog.withLoading {
-                                    withContext(Dispatchers.IO) {
-                                        toggleModule(module.id, !isChecked)
+                        ModuleItem(
+                            navigator = navigator,
+                            module = module,
+                            isChecked = isChecked,
+                            updateUrl = updatedModule.first,
+                            onUninstall = {
+                                scope.launch { onModuleUninstall(module) }
+                            },
+                            onCheckChanged = {
+                                scope.launch {
+                                    val success = loadingDialog.withLoading {
+                                        withContext(Dispatchers.IO) {
+                                            toggleModule(module.id, !isChecked)
+                                        }
                                     }
-                                }
-                                if (success) {
-                                    isChecked = it
-                                    viewModel.fetchModuleList()
+                                    if (success) {
+                                        isChecked = it
+                                        viewModel.fetchModuleList()
 
-                                    val result = snackBarHost.showSnackbar(
-                                        rebootToApply, actionLabel = reboot
-                                    )
-                                    if (result == SnackbarResult.ActionPerformed) {
-                                        reboot()
+                                        val result = snackBarHost.showSnackbar(
+                                            message = rebootToApply,
+                                            actionLabel = reboot,
+                                            duration = SnackbarDuration.Long
+                                        )
+                                        if (result == SnackbarResult.ActionPerformed) {
+                                            reboot()
+                                        }
+                                    } else {
+                                        val message = if (isChecked) failedDisable else failedEnable
+                                        snackBarHost.showSnackbar(message.format(module.name))
                                     }
-                                } else {
-                                    val message = if (isChecked) failedDisable else failedEnable
-                                    snackBarHost.showSnackbar(message.format(module.name))
                                 }
+                            },
+                            onUpdate = {
+                                scope.launch {
+                                    onModuleUpdate(
+                                        module,
+                                        updatedModule.third,
+                                        updatedModule.first,
+                                        "${module.name}-${updatedModule.second}.zip"
+                                    )
+                                }
+                            },
+                            onClick = {
+                                onClickModule(it.id, it.name, it.hasWebUi)
                             }
-                        }, onUpdate = {
-                            scope.launch {
-                                onModuleUpdate(
-                                    module,
-                                    updatedModule.third,
-                                    updatedModule.first,
-                                    "${module.name}-${updatedModule.second}.zip"
-                                )
-                            }
-                        }, onClick = {
-                            onClickModule(it.id, it.name, it.hasWebUi)
-                        })
+                        )
 
                         // fix last item shadow incomplete in LazyColumn
                         Spacer(Modifier.height(1.dp))
@@ -430,28 +460,12 @@ private fun ModuleList(
 
         DownloadListener(context, onInstallModule)
 
-        PullRefreshIndicator(
-            refreshing = viewModel.isRefreshing, state = refreshState, modifier = Modifier.align(
-                Alignment.TopCenter
-            )
-        )
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun TopBar(
-    scrollBehavior: TopAppBarScrollBehavior? = null
-) {
-    TopAppBar(
-        scrollBehavior = scrollBehavior,
-        title = { Text(stringResource(R.string.module)) },
-        windowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)
-    )
-}
-
-@Composable
-private fun ModuleItem(
+fun ModuleItem(
+    navigator: DestinationsNavigator,
     module: ModuleViewModel.ModuleInfo,
     isChecked: Boolean,
     updateUrl: String,
@@ -489,7 +503,7 @@ private fun ModuleItem(
                         )
                     }
                 }
-                .padding(24.dp, 16.dp, 24.dp, 0.dp)
+                .padding(22.dp, 18.dp, 22.dp, 12.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -498,7 +512,9 @@ private fun ModuleItem(
                 val moduleVersion = stringResource(id = R.string.module_version)
                 val moduleAuthor = stringResource(id = R.string.module_author)
 
-                Column(modifier = Modifier.fillMaxWidth(0.8f)) {
+                Column(
+                    modifier = Modifier.fillMaxWidth(0.8f)
+                ) {
                     Text(
                         text = module.name,
                         fontSize = MaterialTheme.typography.titleMedium.fontSize,
@@ -553,56 +569,94 @@ private fun ModuleItem(
                 textDecoration = textDecoration
             )
 
-
             Spacer(modifier = Modifier.height(16.dp))
 
             HorizontalDivider(thickness = Dp.Hairline)
+
+            Spacer(modifier = Modifier.height(4.dp))
 
             Row(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
+
+                if (module.hasActionScript) {
+                    FilledTonalButton(
+                        modifier = Modifier.defaultMinSize(52.dp, 32.dp),
+                        onClick = { navigator.navigate(ExecuteModuleActionScreenDestination(module.id)) },
+                        contentPadding = ButtonDefaults.TextButtonContentPadding
+                    ) {
+                        Icon(
+                            modifier = Modifier
+                                .padding(end = 7.dp)
+                                .size(20.dp),
+                            imageVector = Icons.Outlined.PlayArrow,
+                            contentDescription = null
+                        )
+                        Text(
+                            text = stringResource(R.string.action),
+                            fontFamily = MaterialTheme.typography.labelMedium.fontFamily,
+                            fontSize = MaterialTheme.typography.labelMedium.fontSize
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.weight(0.1f, true))
+                }
+
+                if (module.hasWebUi) {
+                    FilledTonalButton(
+                        modifier = Modifier.defaultMinSize(52.dp, 32.dp),
+                        onClick = { onClick(module) },
+                        interactionSource = interactionSource,
+                        contentPadding = ButtonDefaults.TextButtonContentPadding
+                    ) {
+                        if (!module.hasActionScript) {
+                            Icon(
+                                modifier = Modifier
+                                    .padding(end = 7.dp)
+                                    .size(20.dp),
+                                imageVector = Icons.AutoMirrored.Outlined.Wysiwyg,
+                                contentDescription = null
+                            )
+                        }
+                        Text(
+                            fontFamily = MaterialTheme.typography.labelMedium.fontFamily,
+                            fontSize = MaterialTheme.typography.labelMedium.fontSize,
+                            text = stringResource(R.string.open)
+                        )
+                    }
+                }
+
                 Spacer(modifier = Modifier.weight(1f, true))
 
                 if (updateUrl.isNotEmpty()) {
                     Button(
-                        modifier = Modifier
-                            .padding(0.dp)
-                            .defaultMinSize(52.dp, 32.dp),
+                        modifier = Modifier.defaultMinSize(52.dp, 32.dp),
                         onClick = { onUpdate(module) },
-                        shape = RoundedCornerShape(6.dp),
-                        contentPadding = PaddingValues(0.dp)
+                        shape = ButtonDefaults.textShape,
+                        contentPadding = ButtonDefaults.TextButtonContentPadding
                     ) {
                         Text(
                             fontFamily = MaterialTheme.typography.labelMedium.fontFamily,
                             fontSize = MaterialTheme.typography.labelMedium.fontSize,
-                            text = stringResource(R.string.module_update),
+                            text = stringResource(R.string.module_update)
                         )
                     }
+
+                    Spacer(modifier = Modifier.weight(0.1f, true))
                 }
 
-                TextButton(
+                FilledTonalButton(
+                    modifier = Modifier.defaultMinSize(52.dp, 32.dp),
                     enabled = !module.remove,
                     onClick = { onUninstall(module) },
+                    contentPadding = ButtonDefaults.TextButtonContentPadding
                 ) {
                     Text(
                         fontFamily = MaterialTheme.typography.labelMedium.fontFamily,
                         fontSize = MaterialTheme.typography.labelMedium.fontSize,
-                        text = stringResource(R.string.uninstall),
+                        text = stringResource(R.string.uninstall)
                     )
-                }
-
-                if (module.hasWebUi) {
-                    TextButton(
-                        onClick = { onClick(module) },
-                        interactionSource = interactionSource
-                    ) {
-                        Text(
-                            fontFamily = MaterialTheme.typography.labelMedium.fontFamily,
-                            fontSize = MaterialTheme.typography.labelMedium.fontSize,
-                            text = stringResource(R.string.open),
-                        )
-                    }
                 }
             }
         }
@@ -621,9 +675,10 @@ fun ModuleItemPreview() {
         description = "I am a test module and i do nothing but show a very long description",
         enabled = true,
         update = true,
-        remove = true,
+        remove = false,
         updateJson = "",
         hasWebUi = false,
+        hasActionScript = false
     )
-    ModuleItem(module, true, "", {}, {}, {}, {})
+    ModuleItem(EmptyDestinationsNavigator, module, true, "", {}, {}, {}, {})
 }
